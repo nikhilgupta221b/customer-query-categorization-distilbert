@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: mysql_db
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    platform: linux/amd64
+
+  backend:
+    build: ./backend
+    container_name: ticket_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE}
+    command: >
+      sh -c "
+        until python -c 'import pymysql; pymysql.connect(host=\"db\", user=\"${MYSQL_USER}\", password=\"${MYSQL_PASSWORD}\", database=\"${MYSQL_DATABASE}\")' > /dev/null 2>&1; do
+          echo 'MySQL is unavailable - sleeping'
+          sleep 1
+        done;
+        echo 'MySQL is up - running migrations';
+        python scripts/init_db.py && uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+    # UNCOMMENT THIS LINE to run on the ARM-based Mac
+    platform: linux/amd64
+
+  frontend:
+    build: ./frontend
+    container_name: ticket_frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    # For ARM-based Macs (M1/M2)
+    # platform: linux/arm64/v8
+
+volumes:
+  mysql_data:

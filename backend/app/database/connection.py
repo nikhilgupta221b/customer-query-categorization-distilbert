@@ -2,20 +2,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# The DATABASE_URL is provided by the docker-compose.yml file.
+# We do not need to manually build the URL from individual variables.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Database URL
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "3306")
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_NAME = os.getenv("DB_NAME", "ticket_system")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is not set.")
 
-DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# Create engine
+# Create the SQLAlchemy engine using the complete URL
 engine = create_engine(
     DATABASE_URL,
     echo=True,  # Set to False in production
@@ -23,13 +18,15 @@ engine = create_engine(
     pool_recycle=300
 )
 
-# Create session
+# Create a session local class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Dependency to get DB session
+# Dependency to get a database session
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
+Base = declarative_base()
