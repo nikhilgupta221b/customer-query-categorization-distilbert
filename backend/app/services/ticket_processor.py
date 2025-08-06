@@ -1,76 +1,95 @@
 import asyncio
-import logging
-from sqlalchemy.orm import Session
 from datetime import datetime
-
-from app.database.connection import SessionLocal
-from app.models.database import Ticket, ProcessedTicket, ProcessingStatus, TicketQueue
+from sqlalchemy.orm import Session
+from app.database.connection import get_db
+from app.models import database
+from app.schemas.ticket import ProcessingStatusEnum, TicketQueueEnum as TicketQueue
 from app.services.model_service import model_service
 
-logger = logging.getLogger(__name__)
+PROCESS_INTERVAL_SECONDS = 10
 
 class TicketProcessor:
     def __init__(self):
-        self.is_running = False
-        self.processing_interval = 10
+        self.running = False
+        self.task = None
 
     async def start_processing(self):
-        self.is_running = True
-        logger.info("Starting ticket processor...")
-
-        while self.is_running:
-            try:
-                await self.process_pending_tickets()
-                await asyncio.sleep(self.processing_interval)
-            except Exception as e:
-                logger.error(f"Error in ticket processor loop: {e}")
-                await asyncio.sleep(self.processing_interval)
+        self.running = True
+        while self.running:
+            await self.process_pending_tickets()
+            await asyncio.sleep(PROCESS_INTERVAL_SECONDS)
 
     def stop_processing(self):
-        self.is_running = False
-        logger.info("Stopping ticket processor...")
+        self.running = False
+        if self.task:
+            self.task.cancel()
 
     async def process_pending_tickets(self):
-        db = SessionLocal()
+        db: Session = next(get_db())
         try:
-            pending_tickets = db.query(Ticket).filter(
-                Ticket.processing_status == ProcessingStatus.PENDING
-            ).with_for_update().limit(10).all()
+            # Get pending tickets (with lock)
+            tickets = (
+                db.query(database.Ticket)
+                .filter(database.Ticket.processing_status == ProcessingStatusEnum.PENDING)
+                .limit(10)
+                .with_for_update()
+                .all()
+            )
 
-            for ticket in pending_tickets:
-                ticket.processing_status = ProcessingStatus.PROCESSING
+            for ticket in tickets:
+                print(f"Processing ticket {ticket.id}")
+                ticket.processing_status = ProcessingStatusEnum.PROCESSING
                 ticket.updated_at = datetime.utcnow()
                 db.commit()
-                await self.process_single_ticket(ticket, db)
+
+                try:
+                    prediction = model_service.predict(ticket.subject, ticket.body)
+                    raw_label = prediction["queue"]
+                    normalized_label = raw_label.strip().lower().replace(" ", "_")
+
+                    # Explicit mapping from model output → Enum
+                    QUEUE_MAPPING = {
+                        "technical_support": TicketQueue.TECHNICAL_SUPPORT,
+                        "product_support": TicketQueue.PRODUCT_SUPPORT,
+                        "customer_service": TicketQueue.CUSTOMER_SERVICE,
+                        "billing_support": TicketQueue.BILLING_SUPPORT,
+                        "sales_and_hr": TicketQueue.SALES_AND_HR,
+                        "sales_&_hr": TicketQueue.SALES_AND_HR,  # alias
+                        "saleshr": TicketQueue.SALES_AND_HR,     # optional alias
+                    }
+
+                    if normalized_label not in QUEUE_MAPPING:
+                        raise ValueError(f"'{normalized_label}' is not a valid TicketQueue")
+
+                    mapped_queue = QUEUE_MAPPING[normalized_label]
+
+                    processed = database.ProcessedTicket(
+                        original_ticket_id=ticket.id,
+                        subject=ticket.subject,
+                        body=ticket.body,
+                        queue=mapped_queue,
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow()
+                    )
+                    ticket.processing_status = ProcessingStatusEnum.COMPLETED
+                    ticket.updated_at = datetime.utcnow()
+                    db.add(processed)
+                    db.commit()
+
+                except Exception as e:
+                    print(f"Error processing ticket {ticket.id}: {e}")
+                    ticket.processing_status = ProcessingStatusEnum.FAILED
+                    ticket.updated_at = datetime.utcnow()
+                    db.commit()
         except Exception as e:
-            logger.error(f"Error in process_pending_tickets: {e}")
+            print(f"Failed to fetch/process tickets: {e}")
+            db.rollback()
         finally:
             db.close()
 
-    async def process_single_ticket(self, ticket: Ticket, db: Session):
-        try:
-            if not model_service.is_model_ready():
-                logger.warning("Model not ready. Skipping processing.")
-                return
+    @property
+    def is_running(self):
+        return self.running
 
-            prediction = model_service.predict(ticket.subject, ticket.body)
-            queue = TicketQueue(prediction["queue"])
 
-            processed = ProcessedTicket(
-                original_ticket_id=ticket.id,
-                subject=ticket.subject,
-                body=ticket.body,
-                queue=queue,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            db.add(processed)
-
-            ticket.processing_status = ProcessingStatus.COMPLETED
-            ticket.updated_at = datetime.utcnow()
-            db.commit()
-        except Exception as e:
-            logger.error(f"Error processing ticket {ticket.id}: {e}")
-            ticket.processing_status = ProcessingStatus.FAILED
-            db.commit()
 ticket_processor = TicketProcessor()
