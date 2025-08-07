@@ -1,5 +1,5 @@
 # Use an official Node.js runtime as a parent image
-FROM node:18-alpine as build
+FROM node:22-alpine as build
 
 # Set the working directory
 WORKDIR /app
@@ -21,6 +21,9 @@ FROM nginx:alpine
 
 # Copy the build output from the previous stage to the Nginx web root
 COPY --from=build /app/dist /usr/share/nginx/html
+
+# Copy nginx configuration for SPA routing
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expose port 80
 EXPOSE 80

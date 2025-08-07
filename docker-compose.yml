@@ -35,9 +35,8 @@ services:
           sleep 1
         done;
         echo 'MySQL is up - running migrations';
-        python scripts/init_db.py && uvicorn app.main:app --host 0.0.0.0 --port 8000
+        python scripts/init_db.py && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
       "
-    # UNCOMMENT THIS LINE to run on the ARM-based Mac
     platform: linux/amd64
 
   frontend:
@@ -47,10 +46,7 @@ services:
       - "5173:80"
     depends_on:
       - backend
-    environment:
-      - VITE_API_BASE_URL=http://backend:8000
-    # For ARM-based Macs (M1/M2)
-    # platform: linux/arm64/v8
+    platform: linux/amd64
 
 volumes:
   mysql_data:

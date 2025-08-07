@@ -1,3 +1,14 @@
+from dotenv import load_dotenv
+import os
+from pathlib import Path
+
+# Load the .env file from 2 levels up (project root)
+env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=env_path)
+
+# Optional debug
+print("✅ DATABASE_URL loaded:", os.environ.get("DATABASE_URL"))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
